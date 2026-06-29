@@ -44,6 +44,10 @@ system-update
 
 Beim Start wird einmalig das Sudo-Passwort abgefragt. Danach läuft das Skript vollautomatisch durch.
 
+## **🤖 Hinweis zur Erstellung**
+
+Dieses Skript sowie die vorliegende Dokumentation wurden mit Unterstützung von Künstlicher Intelligenz (KI) erstellt und optimiert.
+
 ## **📄 Lizenz**
 
 Dieses Projekt ist Open Source. Der Quellcode kann frei verwendet, angepasst und weitergegeben werden.
