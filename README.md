@@ -50,4 +50,4 @@ Dieses Skript sowie die vorliegende Dokumentation wurden mit Unterstützung von 
 
 ## **📄 Lizenz**
 
-Dieses Projekt ist Open Source. Der Quellcode kann frei verwendet, angepasst und weitergegeben werden.
+Dieses Projekt ist Open Source und steht unter der [MIT-Lizenz](https://opensource.org/license/mit). Der Quellcode kann frei verwendet, angepasst und weitergegeben werden.
