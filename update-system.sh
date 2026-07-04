@@ -48,13 +48,21 @@ else
 fi
 
 echo -e "\n${BLUE}▶ Prüfe Systemstatus...${RESET}"
-# Neustart prüfen (mit sudo für korrekte Ausführung!)
-if sudo dnf needs-restarting -r > /dev/null 2>&1; then
+# Manuelle Kernel-Prüfung (Da DNF needs-restarting manchmal unzuverlässig ist)
+CURRENT_KERNEL=$(uname -r)
+# Holt den neuesten installierten Kernel, ignoriert Fehler durch "|| true", um set -e nicht auszulösen
+LATEST_KERNEL=$(rpm -q kernel-core --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' 2>/dev/null | sort -V | tail -n 1 || true)
+
+if [[ -n "$LATEST_KERNEL" && "$CURRENT_KERNEL" != "$LATEST_KERNEL" ]]; then
+    REBOOT_MSG="System-Neustart empfohlen (Neuer Kernel installiert)."
+    REBOOT_COLOR="${YELLOW}⚠"
+elif ! sudo dnf needs-restarting -r > /dev/null 2>&1; then
+    # dnf gibt Fehlercode 1 aus, wenn ein Neustart nötig ist (z. B. wegen glibc)
+    REBOOT_MSG="System-Neustart empfohlen (Kern-Bibliotheken aktualisiert)."
+    REBOOT_COLOR="${YELLOW}⚠"
+else
     REBOOT_MSG="Kein Neustart erforderlich."
     REBOOT_COLOR="${GREEN}✔"
-else
-    REBOOT_MSG="System-Neustart empfohlen (z. B. wegen neuem Kernel)."
-    REBOOT_COLOR="${YELLOW}⚠"
 fi
 
 # Finale Ausgabe im Terminal
