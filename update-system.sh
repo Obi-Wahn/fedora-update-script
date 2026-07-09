@@ -47,6 +47,14 @@ else
     echo -e "${YELLOW}⚠ Flatpak nicht installiert, übersprungen.${RESET}"
 fi
 
+echo -e "\n${BLUE}▶ Starte Snap-Updates...${RESET}"
+# Defensive Programmierung: Führt Updates nur aus, wenn Snap vorhanden ist
+if command -v snap &>/dev/null; then
+    sudo snap refresh
+else
+    echo -e "${YELLOW}⚠ Snap nicht installiert, übersprungen.${RESET}"
+fi
+
 echo -e "\n${BLUE}▶ Prüfe Systemstatus...${RESET}"
 # Manuelle Kernel-Prüfung (Da DNF needs-restarting manchmal unzuverlässig ist)
 CURRENT_KERNEL=$(uname -r)
