@@ -3,6 +3,14 @@
 # und Fehlern in Pipes (-o pipefail) sofort ab.
 set -euo pipefail
 
+# =========================================================
+# KONFIGURATION
+# =========================================================
+# Setze auf "true", wenn ungenutzte Abhängigkeiten automatisch 
+# durch 'dnf autoremove' entfernt werden sollen. 
+# (Tipp: Unter Fedora mit Vorsicht genießen, daher Standard = false)
+RUN_AUTOREMOVE="false"
+
 # Farben für die Terminalausgabe definieren
 GREEN="\033[1;32m"
 BLUE="\033[1;34m"
@@ -10,12 +18,16 @@ YELLOW="\033[1;33m"
 RED="\033[1;31m"
 RESET="\033[0m"
 
-# ERR-Trap: Wird aufgerufen, wenn ein Befehl fehlschlägt.
-# Gibt eine rote Fehlermeldung mit der exakten Zeilennummer ($LINENO) aus.
-trap 'echo -e "\n${RED}❌ Fehler in Zeile $LINENO! Update abgebrochen.${RESET}"; exit 1' ERR
+# Root-Check: Verhindert, dass das Skript als "sudo ./update-system.sh" gestartet wird
+if [[ "${EUID:-}" -eq 0 ]]; then
+    echo -e "${RED}❌ Bitte das Skript NICHT als Root (mit sudo) starten! Das Skript fordert die Rechte selbst an.${RESET}"
+    exit 1
+fi
 
-# EXIT-Trap: Wird immer am Ende ausgeführt, egal ob Erfolg oder Abbruch.
-# Beendet den Hintergrundprozess (Sudo-Keepalive) sauber.
+# ERR-Trap: Wird aufgerufen, wenn ein Befehl fehlschlägt.
+trap 'err_code=$?; echo -e "\n${RED}❌ Fehler in Zeile $LINENO (Code $err_code): $BASH_COMMAND\nUpdate abgebrochen.${RESET}"; exit $err_code' ERR
+
+# EXIT-Trap: Beendet den Hintergrundprozess (Sudo-Keepalive) sauber.
 cleanup() {
     if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
@@ -31,13 +43,18 @@ echo -e "${BLUE}▶ Start: $(date '+%d.%m.%Y %H:%M:%S')${RESET}"
 echo -e "${BLUE}▶ Fordere Administratorrechte an...${RESET}"
 sudo -v
 
-# Sudo-Ticket im Hintergrund alle 50s erneuern
-( while kill -0 $$ 2>/dev/null; do sudo -v; sleep 50; done ) &
+# Sudo-Ticket im Hintergrund alle 50s erneuern (-n für non-interactive)
+( while kill -0 $$ 2>/dev/null; do sudo -n -v 2>/dev/null || true; sleep 50; done ) &
 SUDO_KEEPALIVE_PID=$!
 
 echo -e "\n${BLUE}▶ Starte System-Updates via DNF...${RESET}"
-# 'upgrade' ist der technisch modernere Begriff als 'update' bei DNF
 sudo dnf upgrade --refresh -y
+
+# Räumt nicht mehr benötigte Abhängigkeiten auf (falls in Konfiguration aktiviert)
+if [[ "$RUN_AUTOREMOVE" == "true" ]]; then
+    echo -e "${BLUE}▶ Führe DNF Autoremove aus...${RESET}"
+    sudo dnf autoremove -y
+fi
 
 echo -e "\n${BLUE}▶ Starte Flatpak-Updates...${RESET}"
 # Defensive Programmierung: Verhindert Abbruch durch ERR-Trap, falls Flatpak fehlt
@@ -77,7 +94,8 @@ fi
 echo -e "\n${GREEN}✔ Alle Updates erfolgreich abgeschlossen! ($(date '+%H:%M:%S'))${RESET}"
 echo -e "${REBOOT_COLOR} ${REBOOT_MSG}${RESET}"
 
-# KDE Plasma Desktop-Benachrichtigung senden (sicherer Check & Zeilenumbruch-Fix)
+# KDE Plasma Desktop-Benachrichtigung senden
 if command -v notify-send &>/dev/null; then
-    notify-send "System-Update abgeschlossen" "$(printf "Alle Pakete sind aktuell.\n%s" "$REBOOT_MSG")" -i system-software-update
+    # Das "|| true" verhindert, dass ein Fehler hier das gesamte Skript als gescheitert markiert
+    notify-send "System-Update abgeschlossen" "$(printf "Alle Pakete sind aktuell.\n%s" "$REBOOT_MSG")" -i system-software-update || true
 fi
