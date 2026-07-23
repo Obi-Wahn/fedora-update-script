@@ -25,9 +25,9 @@ Ein robustes und automatisiertes Bash-Skript, um Fedora Linux effizient auf dem 
 >    cd fedora-update-script  
 > 2. Das Skript ausführbar machen:  
 >    chmod \+x update-system.sh  
-> 3. **(Optional)** Das Skript in den lokalen Bin-Pfad verschieben, um es systemweit als Befehl (z. B. system-update) verfügbar zu machen:  
+> 3. **(Optional)** Das Skript in den lokalen Bin-Pfad verschieben, um es systemweit als Befehl (z. B. update-system) verfügbar zu machen:  
 >    mkdir \-p \~/.local/bin  
->    mv update-system.sh \~/.local/bin/system-update  
+>    mv update-system.sh \~/.local/bin/update-system  
 >    *Hinweis: Möglicherweise muss das Terminal nach diesem Schritt neu gestartet werden.*
 
 ## **⚙️ Konfiguration**
@@ -45,7 +45,7 @@ Wenn das Skript im aktuellen Verzeichnis liegt:
 
 Wenn es nach \~/.local/bin verschoben wurde, genügt der Aufruf von überall im Terminal:
 
-system-update
+update-system
 
 Beim Start wird einmalig das Sudo-Passwort abgefragt. Danach läuft das Skript vollautomatisch durch.
 
