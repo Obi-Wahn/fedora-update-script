@@ -9,31 +9,80 @@ set -Eeuo pipefail
 # =========================================================
 # KONFIGURATION
 # =========================================================
+
 # Setze auf "true", wenn ungenutzte Abhängigkeiten automatisch 
 # durch 'dnf autoremove' entfernt werden sollen. 
 # (Tipp: Unter Fedora mit Vorsicht genießen, daher Standard = false)
 RUN_AUTOREMOVE="false"
 
 # Setze auf "true", wenn Snap-Pakete aktualisiert werden sollen.
+# (Snap ist unter Fedora standardmäßig nicht installiert)
 RUN_SNAP_UPDATE="false"
 
-# Farben für die Terminalausgabe definieren
-GREEN="\033[1;32m"
-BLUE="\033[1;34m"
-YELLOW="\033[1;33m"
-RED="\033[1;31m"
-RESET="\033[0m"
+# =========================================================
+# FUNKTIONEN & INITIALISIERUNG
+# =========================================================
 
-# Root-Check: Verhindert, dass das Skript als "sudo ./update-system.sh" gestartet wird
-if [[ "${EUID:-}" -eq 0 ]]; then
-    printf '%b❌ Bitte das Skript NICHT als Root (mit sudo) starten! Das Skript fordert die Rechte selbst an.%b\n' "$RED" "$RESET"
+# Farben und NO_COLOR Unterstützung
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    GREEN=$'\033[1;32m'
+    BLUE=$'\033[1;34m'
+    YELLOW=$'\033[1;33m'
+    RED=$'\033[1;31m'
+    RESET=$'\033[0m'
+else
+    GREEN=""
+    BLUE=""
+    YELLOW=""
+    RED=""
+    RESET=""
+fi
+
+# Ausgabefunktionen für sauberen Code
+info()    { printf '%b▶ %s%b\n' "$BLUE" "$*" "$RESET"; }
+success() { printf '%b✔ %s%b\n' "$GREEN" "$*" "$RESET"; }
+warning() { printf '%b⚠ %s%b\n' "$YELLOW" "$*" "$RESET"; }
+error()   { printf '%b❌ %s%b\n' "$RED" "$*" "$RESET" >&2; }
+
+# Validierung der Konfigurationsvariablen
+validate_boolean() {
+    local name=$1
+    local value=$2
+    case "$value" in
+        true|false) ;;
+        *) 
+            error "Ungültiger Wert für $name: $value – erlaubt sind true oder false."
+            exit 2 
+            ;;
+    esac
+}
+validate_boolean "RUN_AUTOREMOVE" "$RUN_AUTOREMOVE"
+validate_boolean "RUN_SNAP_UPDATE" "$RUN_SNAP_UPDATE"
+
+# Betriebssystem-Prüfung
+if [[ ! -r /etc/fedora-release ]]; then
+    error "Dieses Skript ist ausschließlich für Fedora vorgesehen."
     exit 1
 fi
 
-# ERR-Trap: Wird aufgerufen, wenn ein Befehl fehlschlägt.
-trap 'err_code=$?; printf "\n%b❌ Fehler in Zeile %s (Code %s): %s\nUpdate abgebrochen.%b\n" "$RED" "$LINENO" "$err_code" "$BASH_COMMAND" "$RESET"; exit $err_code' ERR
+# Abhängigkeiten prüfen
+required_commands=(sudo dnf rpm uname sort date)
+for cmd in "${required_commands[@]}"; do
+    if ! command -v "$cmd" &>/dev/null; then
+        error "Erforderlicher Befehl fehlt: $cmd"
+        exit 127
+    fi
+done
 
-# EXIT-Trap: Beendet den Hintergrundprozess (Sudo-Keepalive) sauber.
+# Root-Check
+if [[ "${EUID:-}" -eq 0 ]]; then
+    error "Bitte das Skript NICHT als Root (mit sudo) starten! Das Skript fordert die Rechte selbst an."
+    exit 1
+fi
+
+# Traps für Fehler und sauberes Beenden
+trap 'err_code=$?; error "Fehler in Zeile $LINENO (Code $err_code): $BASH_COMMAND\nUpdate abgebrochen."; exit $err_code' ERR
+
 cleanup() {
     if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
@@ -46,77 +95,106 @@ trap cleanup EXIT
 # HAUPTSKRIPT
 # ---------------------------------------------------------
 
-printf '%b▶ Start: %s%b\n' "$BLUE" "$(date '+%d.%m.%Y %H:%M:%S')" "$RESET"
-printf '%b▶ Fordere Administratorrechte an...%b\n' "$BLUE" "$RESET"
+UPDATE_WARNINGS=()
+
+info "Start: $(date '+%d.%m.%Y %H:%M:%S')"
+info "Fordere Administratorrechte an..."
 sudo -v
 
-# Sudo-Ticket im Hintergrund alle 50s erneuern (-n für non-interactive)
+# Sudo-Ticket im Hintergrund alle 50s erneuern
 ( while kill -0 $$ 2>/dev/null; do sudo -n -v 2>/dev/null || true; sleep 50; done ) &
 SUDO_KEEPALIVE_PID=$!
 
-printf '\n%b▶ Starte System-Updates via DNF...%b\n' "$BLUE" "$RESET"
+printf '\n'
+info "Starte System-Updates via DNF..."
 sudo dnf upgrade --refresh -y
 
-# Räumt nicht mehr benötigte Abhängigkeiten auf (falls in Konfiguration aktiviert)
 if [[ "$RUN_AUTOREMOVE" == "true" ]]; then
-    printf '\n%b▶ Führe DNF Autoremove aus...%b\n' "$BLUE" "$RESET"
+    printf '\n'
+    info "Führe DNF Autoremove aus..."
     sudo dnf autoremove -y
 else
-    printf '%bℹ "autoremove" ist in der Konfiguration deaktiviert. Übersprungen.%b\n' "$YELLOW" "$RESET"
+    info "DNF 'autoremove' ist in der Konfiguration deaktiviert. Übersprungen."
 fi
 
-printf '\n%b▶ Starte Flatpak-Updates...%b\n' "$BLUE" "$RESET"
-# Defensive Programmierung: Verhindert Abbruch durch ERR-Trap, falls Flatpak fehlt
+printf '\n'
+info "Starte Flatpak-Updates..."
 if command -v flatpak &>/dev/null; then
-    flatpak update -y
+    # Das '||' verhindert, dass set -e das Skript bei temporären Flatpak-Fehlern beendet
+    flatpak update -y || {
+        warning "Flatpak-Update meldete einen Fehler (z.B. Repo unerreichbar)."
+        UPDATE_WARNINGS+=("Flatpak")
+    }
 else
-    printf '%b⚠ Flatpak nicht installiert, übersprungen.%b\n' "$YELLOW" "$RESET"
+    warning "Flatpak nicht installiert, übersprungen."
 fi
 
-# Snap-Updates (falls aktiviert)
+printf '\n'
 if [[ "$RUN_SNAP_UPDATE" == "true" ]]; then
-    printf '\n%b▶ Starte Snap-Updates...%b\n' "$BLUE" "$RESET"
+    info "Starte Snap-Updates..."
     if command -v snap &>/dev/null; then
-        # Prüfen, ob der Hintergrunddienst von Snap (snapd) tatsächlich läuft
         if systemctl is-active --quiet snapd.service || systemctl is-active --quiet snapd.socket; then
-            sudo snap refresh
+            sudo snap refresh || {
+                warning "Snap-Update meldete einen Fehler."
+                UPDATE_WARNINGS+=("Snap")
+            }
         else
-            printf '%b⚠ Snap ist zwar installiert, aber der snapd-Dienst ist nicht aktiv. Übersprungen.%b\n' "$YELLOW" "$RESET"
+            warning "Snap ist zwar installiert, aber der snapd-Dienst ist nicht aktiv. Übersprungen."
         fi
     else
-        printf '%bℹ Snap ist nicht installiert. Übersprungen.%b\n' "$YELLOW" "$RESET"
+        info "Snap ist nicht installiert. Übersprungen."
     fi
 else
-    printf '\n%bℹ Snap-Updates sind in der Konfiguration deaktiviert. Übersprungen.%b\n' "$YELLOW" "$RESET"
+    info "Snap-Updates sind in der Konfiguration deaktiviert. Übersprungen."
 fi
 
-printf '\n%b▶ Prüfe Systemstatus...%b\n' "$BLUE" "$RESET"
-# Manuelle Kernel-Prüfung (Da DNF needs-restarting manchmal unzuverlässig ist)
-CURRENT_KERNEL=$(uname -r)
-# Holt den neuesten installierten Kernel, ignoriert Fehler durch "|| true", um set -e nicht auszulösen
-LATEST_KERNEL=$(rpm -q kernel-core --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' 2>/dev/null | sort -V | tail -n 1 || true)
+printf '\n'
+info "Prüfe Systemstatus..."
 
+# Sichere Kernel-Prüfung
+CURRENT_KERNEL=$(uname -r)
+LATEST_KERNEL=""
+if rpm -q kernel-core &>/dev/null; then
+    LATEST_KERNEL=$(LC_ALL=C rpm -q kernel-core --queryformat '%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort -V | tail -n 1 || true)
+fi
+
+# Neustart-Logik mit exakter Return-Code-Auswertung
 if [[ -n "$LATEST_KERNEL" && "$CURRENT_KERNEL" != "$LATEST_KERNEL" ]]; then
     REBOOT_MSG="System-Neustart empfohlen (Neuer Kernel installiert)."
     REBOOT_COLOR="$YELLOW"
     REBOOT_ICON="⚠"
-elif ! sudo dnf needs-restarting -r > /dev/null 2>&1; then
-    # dnf gibt Fehlercode 1 aus, wenn ein Neustart nötig ist (z. B. wegen glibc)
-    REBOOT_MSG="System-Neustart empfohlen (Kern-Bibliotheken aktualisiert)."
-    REBOOT_COLOR="$YELLOW"
-    REBOOT_ICON="⚠"
-else
+elif NEEDS_RESTART_OUTPUT=$(sudo dnf needs-restarting -r 2>&1); then
     REBOOT_MSG="Kein Neustart erforderlich."
     REBOOT_COLOR="$GREEN"
     REBOOT_ICON="✔"
+else
+    NEEDS_RESTART_RC=$?
+    if (( NEEDS_RESTART_RC == 1 )); then
+        REBOOT_MSG="System-Neustart empfohlen (Systemkomponenten aktualisiert)."
+        REBOOT_COLOR="$YELLOW"
+        REBOOT_ICON="⚠"
+    else
+        REBOOT_MSG="Neustartstatus konnte nicht zuverlässig ermittelt werden."
+        REBOOT_COLOR="$RED"
+        REBOOT_ICON="❓"
+        warning "DNF-Prüfung fehlgeschlagen (Code $NEEDS_RESTART_RC): $NEEDS_RESTART_OUTPUT"
+    fi
 fi
 
 # Finale Ausgabe im Terminal
-printf '\n%b✔ Alle vorgesehenen Update-Schritte wurden ohne Fehler ausgeführt. (%s)%b\n' "$GREEN" "$(date '+%H:%M:%S')" "$RESET"
+printf '\n'
+if [[ ${#UPDATE_WARNINGS[@]} -eq 0 ]]; then
+    success "Alle vorgesehenen Update-Schritte wurden ohne Fehler ausgeführt. ($(date '+%H:%M:%S'))"
+    NOTIFY_MSG="Alle vorgesehenen Update-Schritte wurden ohne Fehler ausgeführt."
+else
+    # Zeigt Warnungen im Abschluss an, falls optionale Paketmanager zickten
+    warning "Update mit Teilfehlern abgeschlossen (${UPDATE_WARNINGS[*]}). Bitte Terminalausgabe prüfen. ($(date '+%H:%M:%S'))"
+    NOTIFY_MSG="Update abgeschlossen, aber mit Warnungen bei: ${UPDATE_WARNINGS[*]}. Bitte Terminal prüfen."
+fi
+
 printf '%b%s %s%b\n' "$REBOOT_COLOR" "$REBOOT_ICON" "$REBOOT_MSG" "$RESET"
 
-# KDE Plasma / GNOME Desktop-Benachrichtigung senden
+# Desktop-Benachrichtigung senden
 if command -v notify-send &>/dev/null; then
-    # Das "|| true" verhindert, dass ein Fehler hier das gesamte Skript als gescheitert markiert
-    notify-send "System-Update abgeschlossen" "$(printf "Alle vorgesehenen Update-Schritte wurden ohne Fehler ausgeführt.\n%s" "$REBOOT_MSG")" -i system-software-update || true
+    notify-send "System-Update abgeschlossen" "$(printf "%s\n%s" "$NOTIFY_MSG" "$REBOOT_MSG")" -i system-software-update || true
 fi
